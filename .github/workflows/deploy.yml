@@ -1,0 +1,144 @@
+name: Build and deploy
+
+# Build once, scan, push to ECR, then roll the same image out to dev and prod.
+# Each deploy registers a new task definition revision and waits until the
+# ECS deployment is healthy; the circuit breaker rolls back a bad release.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  PROJECT: ${{ vars.PROJECT || 'webapp' }}
+
+jobs:
+  build:
+    name: Build, scan, push
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Unit tests
+        working-directory: app
+        run: |
+          pip install -r requirements-dev.txt
+          python -m pytest
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app
+          load: true
+          push: false
+          tags: webapp:${{ github.sha }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: webapp:${{ github.sha }}
+          fail-build: true
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
+
+      - name: AWS credentials
+        if: vars.AWS_DEPLOY_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        if: vars.AWS_DEPLOY_ROLE_ARN != ''
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Push image
+        if: vars.AWS_DEPLOY_ROLE_ARN != ''
+        id: push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          SHA: ${{ github.sha }}
+        run: |
+          image="$REGISTRY/$PROJECT:$SHA"
+          docker tag "webapp:$SHA" "$image"
+          docker push "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "Pushed \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-dev:
+    name: Deploy to dev
+    needs: build
+    if: needs.build.outputs.image != ''
+    runs-on: ubuntu-24.04
+    environment: dev
+    env:
+      TARGET_ENV: dev
+    steps: &deploy-steps
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Fetch current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$PROJECT-$TARGET_ENV" \
+            --query taskDefinition > task-definition.json
+
+      - name: Render new image into the task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@8d79160660ad39c402a16e5fc7cd2a32e8f7d6b7 # v1.9.1
+        with:
+          task-definition: task-definition.json
+          container-name: app
+          image: ${{ needs.build.outputs.image }}
+          environment-variables: |
+            APP_VERSION=${{ github.sha }}
+
+      - name: Deploy and wait for a healthy rollout
+        uses: aws-actions/amazon-ecs-deploy-task-definition@a00d4d57ac0de1a99b39fe469f3d898d38717c2b # v2.6.4
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          cluster: ${{ env.PROJECT }}-${{ env.TARGET_ENV }}
+          service: ${{ env.PROJECT }}-${{ env.TARGET_ENV }}
+          wait-for-service-stability: true
+          wait-for-minutes: 15
+
+  deploy-prod:
+    name: Deploy to prod
+    needs: [build, deploy-dev]
+    runs-on: ubuntu-24.04
+    # Add required reviewers to the "prod" environment so this waits for approval.
+    environment: prod
+    env:
+      TARGET_ENV: prod
+    steps: *deploy-steps

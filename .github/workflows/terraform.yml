@@ -1,0 +1,132 @@
+name: Terraform
+
+# plan on pull requests, plan + apply on main (dev first, then prod).
+# Uses GitHub OIDC; no AWS keys are stored in the repository.
+# Skips cleanly until the repository variables from `bootstrap` are set.
+
+on:
+  pull_request:
+    paths:
+      - "environments/**"
+      - "stacks/**"
+      - "modules/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "environments/**"
+      - "stacks/**"
+      - "modules/**"
+      - ".github/workflows/terraform.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.16.5"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+
+jobs:
+  plan:
+    name: Plan (${{ matrix.environment }})
+    if: vars.AWS_PLAN_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Init
+        working-directory: environments/${{ matrix.environment }}
+        run: terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="region=$AWS_REGION"
+
+      - name: Plan
+        id: plan
+        working-directory: environments/${{ matrix.environment }}
+        run: |
+          set +e
+          terraform plan -lock-timeout=5m -detailed-exitcode -out=tfplan
+          code=$?
+          set -e
+          [ "$code" -eq 1 ] && exit 1
+          echo "changes=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Plan summary
+        working-directory: environments/${{ matrix.environment }}
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+          CHANGES: ${{ steps.plan.outputs.changes }}
+        run: |
+          {
+            echo "### Terraform plan: ${ENVIRONMENT} (changes: ${CHANGES})"
+            echo '<details><summary>Show plan</summary>'
+            echo
+            echo '```'
+            terraform show -no-color tfplan | tail -c 60000
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply-dev:
+    name: Apply (dev)
+    needs: plan
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_APPLY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    environment: dev
+    env:
+      TARGET_ENV: dev
+    steps: &apply-steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Init, plan and apply
+        working-directory: environments/${{ env.TARGET_ENV }}
+        run: |
+          terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="region=$AWS_REGION"
+          terraform plan -lock-timeout=5m -out=tfplan
+          terraform apply -lock-timeout=5m tfplan
+
+  apply-prod:
+    name: Apply (prod)
+    needs: apply-dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_APPLY_ROLE_ARN != ''
+    runs-on: ubuntu-24.04
+    # Add required reviewers to the "prod" environment so this waits for approval.
+    environment: prod
+    env:
+      TARGET_ENV: prod
+    steps: *apply-steps
