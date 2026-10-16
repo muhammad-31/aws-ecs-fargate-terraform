@@ -9,7 +9,7 @@ variable "project" {
 }
 
 variable "repository" {
-  description = "Source repository, recorded in resource tags."
+  description = "Source repository, recorded in resource tags (set by CI from github.repository)."
   type        = string
   default     = "unknown"
 }

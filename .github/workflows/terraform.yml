@@ -34,6 +34,7 @@ env:
   TF_INPUT: "false"
   AWS_REGION: ${{ vars.AWS_REGION }}
   TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+  TF_VAR_repository: ${{ github.repository }}
 
 jobs:
   plan:
@@ -93,11 +94,12 @@ jobs:
   apply-dev:
     name: Apply (dev)
     needs: plan
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_APPLY_ROLE_ARN != ''
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_APPLY_ROLE_ARN_DEV != ''
     runs-on: ubuntu-24.04
     environment: dev
     env:
       TARGET_ENV: dev
+      APPLY_ROLE_ARN: ${{ vars.AWS_APPLY_ROLE_ARN_DEV }}
     steps: &apply-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -110,7 +112,7 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-to-assume: ${{ env.APPLY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Init, plan and apply
@@ -123,10 +125,11 @@ jobs:
   apply-prod:
     name: Apply (prod)
     needs: apply-dev
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_APPLY_ROLE_ARN != ''
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AWS_APPLY_ROLE_ARN_PROD != ''
     runs-on: ubuntu-24.04
     # Add required reviewers to the "prod" environment so this waits for approval.
     environment: prod
     env:
       TARGET_ENV: prod
+      APPLY_ROLE_ARN: ${{ vars.AWS_APPLY_ROLE_ARN_PROD }}
     steps: *apply-steps

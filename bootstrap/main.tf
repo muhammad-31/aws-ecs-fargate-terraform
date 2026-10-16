@@ -1,7 +1,8 @@
 # One-time, account-level resources that every environment depends on:
 #   - encrypted S3 bucket for Terraform state (S3-native locking, no DynamoDB)
 #   - ECR repository for the application image (one image, promoted dev -> prod)
-#   - GitHub Actions OIDC provider and three narrowly-trusted IAM roles
+#   - GitHub Actions OIDC provider and narrowly-trusted IAM roles (plan,
+#     one apply role per environment, deploy)
 #
 # Apply this once per AWS account with local state, then (optionally) migrate
 # its own state into the bucket it created. See README "Getting started".
@@ -21,6 +22,10 @@ locals {
     "repo:${var.github_repository}:ref:refs/heads/main",
   ]
   environment_subjects = [for env in var.environments : "repo:${var.github_repository}:environment:${env}"]
+
+  # Terraform's S3-native lock is an object next to the state: <key>.tflock
+  state_objects = "${aws_s3_bucket.state.arn}/*"
+  lock_objects  = "${aws_s3_bucket.state.arn}/*.tflock"
 }
 
 # ---------------------------------------------------------------------------
@@ -233,7 +238,11 @@ data "aws_iam_policy_document" "trust_plan" {
   }
 }
 
-data "aws_iam_policy_document" "trust_environments" {
+# One apply role per GitHub environment: the prod role can only be assumed by
+# jobs running in the "prod" environment (and so behind its reviewers).
+data "aws_iam_policy_document" "trust_apply" {
+  for_each = toset(var.environments)
+
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
 
@@ -251,7 +260,7 @@ data "aws_iam_policy_document" "trust_environments" {
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
-      values   = local.environment_subjects
+      values   = ["repo:${var.github_repository}:environment:${each.key}"]
     }
   }
 }
@@ -280,8 +289,10 @@ data "aws_iam_policy_document" "trust_deploy" {
   }
 }
 
-# State access shared by the plan and apply roles.
-data "aws_iam_policy_document" "state_access" {
+# Plan reads state and may only create and remove lock files, so code in a
+# pull request cannot overwrite or delete state. The apply roles have
+# AdministratorAccess and need no extra state policy.
+data "aws_iam_policy_document" "plan_state" {
   statement {
     sid       = "ListStateBucket"
     actions   = ["s3:ListBucket"]
@@ -289,9 +300,15 @@ data "aws_iam_policy_document" "state_access" {
   }
 
   statement {
-    sid       = "ReadWriteStateAndLockFiles"
-    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.state.arn}/*"]
+    sid       = "ReadState"
+    actions   = ["s3:GetObject"]
+    resources = [local.state_objects]
+  }
+
+  statement {
+    sid       = "TakeAndReleaseLocks"
+    actions   = ["s3:PutObject", "s3:DeleteObject"]
+    resources = [local.lock_objects]
   }
 
   statement {
@@ -301,11 +318,11 @@ data "aws_iam_policy_document" "state_access" {
   }
 }
 
-# --- plan: read-only, runs on every pull request ---------------------------
+# --- plan: read-only (plus lock files), runs on every pull request ---------
 
 resource "aws_iam_role" "plan" {
   name                 = "${var.project}-github-plan"
-  description          = "terraform plan from pull requests (read-only)"
+  description          = "terraform plan from pull requests and main (read-only)"
   assume_role_policy   = data.aws_iam_policy_document.trust_plan.json
   max_session_duration = 3600
 }
@@ -318,21 +335,25 @@ resource "aws_iam_role_policy_attachment" "plan_readonly" {
 resource "aws_iam_role_policy" "plan_state" {
   name   = "terraform-state"
   role   = aws_iam_role.plan.id
-  policy = data.aws_iam_policy_document.state_access.json
+  policy = data.aws_iam_policy_document.plan_state.json
 }
 
 # --- apply: only from protected GitHub environments ------------------------
 
 resource "aws_iam_role" "apply" {
-  name                 = "${var.project}-github-apply"
-  description          = "terraform apply from protected GitHub environments"
-  assume_role_policy   = data.aws_iam_policy_document.trust_environments.json
+  for_each = toset(var.environments)
+
+  name                 = "${var.project}-github-apply-${each.key}"
+  description          = "terraform apply from the ${each.key} GitHub environment"
+  assume_role_policy   = data.aws_iam_policy_document.trust_apply[each.key].json
   max_session_duration = 3600
 }
 
 resource "aws_iam_role_policy_attachment" "apply_admin" {
-  #checkov:skip=CKV_AWS_274:Terraform manages IAM, KMS and networking, so apply needs broad rights. It is only assumable from GitHub environments with required reviewers. Swap for a scoped policy + permissions boundary for regulated clients.
-  role       = aws_iam_role.apply.name
+  #checkov:skip=CKV_AWS_274:Terraform manages IAM, KMS and networking, so apply needs broad rights. Each role is only assumable from its own GitHub environment (restricted to main, with reviewers on prod). See README "Security notes".
+  for_each = aws_iam_role.apply
+
+  role       = each.value.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 

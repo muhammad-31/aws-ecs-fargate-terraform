@@ -119,6 +119,7 @@ module "database" {
   multi_az                = var.db_multi_az
   backup_retention_days   = var.db_backup_retention_days
   deletion_protection     = var.deletion_protection
+  log_retention_days      = var.log_retention_days
   kms_key_arn             = aws_kms_key.this.arn
 }
 

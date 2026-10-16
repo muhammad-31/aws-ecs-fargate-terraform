@@ -7,6 +7,8 @@ credentials are injected from Secrets Manager (DB_USER / DB_PASSWORD).
 from dataclasses import dataclass
 import os
 
+from psycopg.conninfo import make_conninfo
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -26,10 +28,16 @@ class Settings:
 
     @property
     def database_conninfo(self) -> str:
-        return (
-            f"host={self.db_host} port={self.db_port} dbname={self.db_name} "
-            f"user={self.db_user} password={self.db_password} "
-            f"sslmode={self.db_sslmode} connect_timeout=3"
+        # make_conninfo quotes values, so generated passwords with spaces,
+        # quotes or backslashes still produce a valid connection string.
+        return make_conninfo(
+            host=self.db_host,
+            port=self.db_port,
+            dbname=self.db_name,
+            user=self.db_user,
+            password=self.db_password,
+            sslmode=self.db_sslmode,
+            connect_timeout=3,
         )
 
 

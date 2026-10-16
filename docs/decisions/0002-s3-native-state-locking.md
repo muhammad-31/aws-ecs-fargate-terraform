@@ -16,5 +16,7 @@ Use `use_lockfile = true` and no DynamoDB table.
 
 - One fewer resource and IAM permission set to manage.
 - Requires Terraform >= 1.10 (pinned in `required_version` and in CI).
-- The CI roles need `s3:PutObject` / `s3:DeleteObject` on the state bucket to
-  create and release lock files; `bootstrap` grants exactly that.
+- Even the read-only plan role needs `s3:PutObject` / `s3:DeleteObject` to
+  create and release lock files. Because the lock is a separate object
+  (`<key>.tflock`), `bootstrap` can grant that on `*.tflock` only, so plan can
+  never overwrite or delete state.

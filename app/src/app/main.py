@@ -5,6 +5,7 @@
 /         basic info, including the deployed version
 """
 
+import json
 import logging
 import time
 
@@ -15,10 +16,26 @@ from app.config import Settings, load_settings
 
 settings: Settings = load_settings()
 
-logging.basicConfig(
-    level=settings.log_level.upper(),
-    format='{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","message":"%(message)s"}',
-)
+
+
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line, so CloudWatch Logs Insights can query fields."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "time": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry)
+
+
+handler = logging.StreamHandler()
+handler.setFormatter(JsonFormatter())
+logging.basicConfig(level=settings.log_level.upper(), handlers=[handler])
 log = logging.getLogger("app")
 
 app = FastAPI(title="webapp", version=settings.app_version)

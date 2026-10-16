@@ -128,7 +128,7 @@ variable "task_role_policy_arns" {
 }
 
 variable "kms_key_arn" {
-  description = "KMS key for log groups and ECS Exec sessions."
+  description = "KMS key for log groups, ECS Exec sessions and the secrets in var.secret_arns."
   type        = string
 }
 

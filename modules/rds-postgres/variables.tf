@@ -97,6 +97,12 @@ variable "performance_insights_enabled" {
 }
 
 variable "kms_key_arn" {
-  description = "KMS key for storage and Performance Insights encryption."
+  description = "KMS key for storage, the master user secret, exported logs and Performance Insights."
   type        = string
+}
+
+variable "log_retention_days" {
+  description = "Retention for the exported PostgreSQL logs."
+  type        = number
+  default     = 30
 }

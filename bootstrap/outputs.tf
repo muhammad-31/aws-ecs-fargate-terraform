@@ -13,9 +13,9 @@ output "plan_role_arn" {
   value       = aws_iam_role.plan.arn
 }
 
-output "apply_role_arn" {
-  description = "Role for terraform apply (GitHub variable AWS_APPLY_ROLE_ARN)."
-  value       = aws_iam_role.apply.arn
+output "apply_role_arns" {
+  description = "Apply role per environment (GitHub variables AWS_APPLY_ROLE_ARN_<ENV>)."
+  value       = { for env, role in aws_iam_role.apply : env => role.arn }
 }
 
 output "deploy_role_arn" {
@@ -25,12 +25,14 @@ output "deploy_role_arn" {
 
 output "github_variables" {
   description = "Copy these into Settings -> Secrets and variables -> Actions -> Variables."
-  value = {
-    AWS_REGION          = var.aws_region
-    TF_STATE_BUCKET     = aws_s3_bucket.state.id
-    AWS_PLAN_ROLE_ARN   = aws_iam_role.plan.arn
-    AWS_APPLY_ROLE_ARN  = aws_iam_role.apply.arn
-    AWS_DEPLOY_ROLE_ARN = aws_iam_role.deploy.arn
-    ECR_REPOSITORY      = aws_ecr_repository.app.name
-  }
+  value = merge(
+    {
+      AWS_REGION          = var.aws_region
+      TF_STATE_BUCKET     = aws_s3_bucket.state.id
+      AWS_PLAN_ROLE_ARN   = aws_iam_role.plan.arn
+      AWS_DEPLOY_ROLE_ARN = aws_iam_role.deploy.arn
+      ECR_REPOSITORY      = aws_ecr_repository.app.name
+    },
+    { for env, role in aws_iam_role.apply : "AWS_APPLY_ROLE_ARN_${upper(env)}" => role.arn },
+  )
 }

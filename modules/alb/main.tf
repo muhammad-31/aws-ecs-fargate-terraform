@@ -186,7 +186,8 @@ resource "aws_lb" "this" {
 
 resource "aws_lb_target_group" "app" {
   #checkov:skip=CKV_AWS_378:TLS terminates at the ALB; ALB-to-task traffic stays inside private subnets.
-  name                 = "${var.name}-app"
+  # A fixed name would collide with itself on replacement (create_before_destroy).
+  name_prefix          = "app-"
   port                 = var.target_port
   protocol             = "HTTP"
   target_type          = "ip"
@@ -201,6 +202,8 @@ resource "aws_lb_target_group" "app" {
     healthy_threshold   = 2
     unhealthy_threshold = 3
   }
+
+  tags = { Name = "${var.name}-app" }
 
   lifecycle {
     create_before_destroy = true

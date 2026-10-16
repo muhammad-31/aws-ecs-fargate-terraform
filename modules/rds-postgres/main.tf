@@ -1,5 +1,17 @@
 locals {
   engine_major = split(".", var.engine_version)[0]
+  log_exports  = ["postgresql", "upgrade"]
+}
+
+# RDS would create these on first export, unencrypted and kept forever.
+# Creating them first sets the key and the retention.
+resource "aws_cloudwatch_log_group" "exports" {
+  #checkov:skip=CKV_AWS_338:Retention follows the environment's log_retention_days; long-term retention belongs in a log archive.
+  for_each = toset(local.log_exports)
+
+  name              = "/aws/rds/instance/${var.name}/${each.key}"
+  retention_in_days = var.log_retention_days
+  kms_key_id        = var.kms_key_arn
 }
 
 resource "aws_db_subnet_group" "this" {
@@ -96,7 +108,8 @@ resource "aws_db_instance" "this" {
 
   # RDS generates the password, stores it in Secrets Manager and rotates it.
   # It never appears in Terraform state or variables.
-  manage_master_user_password = true
+  manage_master_user_password   = true
+  master_user_secret_kms_key_id = var.kms_key_arn
 
   allocated_storage     = var.allocated_storage
   max_allocated_storage = var.max_allocated_storage
@@ -125,7 +138,7 @@ resource "aws_db_instance" "this" {
   skip_final_snapshot       = !var.deletion_protection
   final_snapshot_identifier = var.deletion_protection ? "${var.name}-final" : null
 
-  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  enabled_cloudwatch_logs_exports = local.log_exports
 
   monitoring_interval = var.monitoring_interval
   monitoring_role_arn = var.monitoring_interval > 0 ? aws_iam_role.monitoring[0].arn : null
@@ -134,4 +147,6 @@ resource "aws_db_instance" "this" {
   performance_insights_kms_key_id = var.performance_insights_enabled ? var.kms_key_arn : null
 
   tags = { Name = var.name }
+
+  depends_on = [aws_cloudwatch_log_group.exports]
 }

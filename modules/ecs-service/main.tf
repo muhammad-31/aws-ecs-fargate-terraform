@@ -103,6 +103,18 @@ data "aws_iam_policy_document" "execution_secrets" {
     actions   = ["secretsmanager:GetSecretValue"]
     resources = var.secret_arns
   }
+
+  # The secrets are encrypted with the stack's customer-managed key.
+  statement {
+    actions   = ["kms:Decrypt"]
+    resources = [var.kms_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${data.aws_region.current.region}.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "execution_secrets" {

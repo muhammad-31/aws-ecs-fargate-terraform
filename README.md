@@ -89,7 +89,10 @@ terraform output github_variables
 
 **2. Configure GitHub**
 
-- *Settings → Environments*: create `dev` and `prod`. Add required reviewers to `prod`.
+- *Settings → Environments*: create `dev` and `prod`. In both, set
+  *Deployment branches* to `main` only; the AWS roles trust the environment
+  name, so this is what stops other branches from using them. Add required
+  reviewers to `prod`.
 - *Settings → Secrets and variables → Actions → Variables*: add every value from
   `github_variables`, plus `PROJECT=webapp`.
 
@@ -141,14 +144,22 @@ destroyed outside working hours (`deletion_protection = false` there on purpose)
 ## Security notes
 
 - No long-lived credentials: GitHub assumes IAM roles through OIDC, each trusted
-  only for specific events. `plan` is limited to pull requests and `main`;
-  `apply` and `deploy` only work from the `dev`/`prod` GitHub environments.
+  only for specific events. `plan` is limited to pull requests and `main`, can
+  read state and may only write lock files. Each environment has its own apply
+  role, assumable only from that GitHub environment; `deploy` works from `main`
+  and the two environments.
+- The apply roles use `AdministratorAccess`, because Terraform here manages IAM,
+  KMS and networking. Two controls keep that in check: deployment branch rules
+  and prod reviewers. Dev and prod still share one account in this example.
+  For real isolation, put each environment in its own AWS account (AWS
+  Organizations), or attach a scoped policy and a permissions boundary.
 - The deploy role can push to one ECR repository, update services named
   `<project>-*` and pass only the two ECS roles.
 - Tasks have no public IPs. The database subnets have no route to the internet,
   and the DB security group accepts connections only from the service's security group.
-- Everything at rest is encrypted with customer-managed KMS keys with rotation,
-  except ALB access logs, which only support SSE-S3.
+- Data at rest uses customer-managed KMS keys with rotation: state, images, RDS
+  storage, the RDS master secret, and every log group (ECS, VPC flow logs, RDS
+  exports). The exception is ALB access logs, which only support SSE-S3.
 - Every Checkov finding that is accepted rather than fixed has an inline
   `#checkov:skip` with the reason next to the resource.
 

@@ -1,5 +1,9 @@
+import json
+import logging
+
 import psycopg
 import pytest
+from psycopg.conninfo import conninfo_to_dict
 from fastapi.testclient import TestClient
 
 from app import main
@@ -86,3 +90,20 @@ def test_conninfo_never_leaks_into_readiness_response(client, monkeypatch):
     monkeypatch.setattr(main, "check_database", broken)
 
     assert "hunter2" not in client.get("/readyz").text
+
+
+def test_conninfo_survives_awkward_passwords():
+    password = "p a'ss\\word="
+    parsed = conninfo_to_dict(settings_with_db(db_password=password).database_conninfo)
+
+    assert parsed["password"] == password
+    assert parsed["sslmode"] == "require"
+
+
+def test_log_lines_are_valid_json_even_with_quotes():
+    record = logging.LogRecord("app", logging.WARNING, __file__, 1, 'bad "input": %s', ("x\ny",), None)
+
+    entry = json.loads(main.JsonFormatter().format(record))
+
+    assert entry["message"] == 'bad "input": x\ny'
+    assert entry["level"] == "WARNING"
