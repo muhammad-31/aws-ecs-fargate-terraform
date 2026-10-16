@@ -13,10 +13,10 @@ variable "subnet_ids" {
   type        = list(string)
 }
 
-variable "allowed_security_group_ids" {
-  description = "Security groups allowed to connect on 5432."
-  type        = list(string)
-  default     = []
+variable "allowed_security_groups" {
+  description = "Security groups allowed to connect on 5432, as name => security group ID (e.g. { ecs_service = sg-... })."
+  type        = map(string)
+  default     = {}
 }
 
 variable "engine_version" {

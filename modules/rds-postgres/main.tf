@@ -17,11 +17,14 @@ resource "aws_security_group" "db" {
   tags = { Name = "${var.name}-db" }
 }
 
+# Keys are static names chosen by the caller, values are security group IDs
+# that may only be known after apply. for_each over the IDs themselves would
+# fail on the first plan.
 resource "aws_vpc_security_group_ingress_rule" "from_clients" {
-  for_each = toset(var.allowed_security_group_ids)
+  for_each = var.allowed_security_groups
 
   security_group_id            = aws_security_group.db.id
-  description                  = "PostgreSQL from ${each.value}"
+  description                  = "PostgreSQL from ${each.key}"
   referenced_security_group_id = each.value
   from_port                    = 5432
   to_port                      = 5432

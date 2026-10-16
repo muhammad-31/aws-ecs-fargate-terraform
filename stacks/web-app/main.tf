@@ -110,16 +110,16 @@ module "alb" {
 module "database" {
   source = "../../modules/rds-postgres"
 
-  name                       = local.name
-  vpc_id                     = module.network.vpc_id
-  subnet_ids                 = module.network.data_subnet_ids
-  allowed_security_group_ids = [module.service.task_security_group_id]
-  instance_class             = var.db_instance_class
-  allocated_storage          = var.db_allocated_storage
-  multi_az                   = var.db_multi_az
-  backup_retention_days      = var.db_backup_retention_days
-  deletion_protection        = var.deletion_protection
-  kms_key_arn                = aws_kms_key.this.arn
+  name                    = local.name
+  vpc_id                  = module.network.vpc_id
+  subnet_ids              = module.network.data_subnet_ids
+  allowed_security_groups = { ecs_service = module.service.task_security_group_id }
+  instance_class          = var.db_instance_class
+  allocated_storage       = var.db_allocated_storage
+  multi_az                = var.db_multi_az
+  backup_retention_days   = var.db_backup_retention_days
+  deletion_protection     = var.deletion_protection
+  kms_key_arn             = aws_kms_key.this.arn
 }
 
 module "service" {
